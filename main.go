@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"encoding/csv"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -71,11 +72,13 @@ func main() {
 		5: func() { handleAction(addEntity, &Customer{}, db) },
 		6: func() { handleAction(displayEntities, &Customer{}, db) },
 		7: func() { handleAction(modifyEntity, &Customer{}, db) },
-		8: func() { os.Exit(0) },
+		8: func() { exportToCSV(&Product{}, db, "exports/products.csv") },
+		9: func() { exportToCSV(&Customer{}, db, "exports/customers.csv") },
+		10: func() { os.Exit(0) },
 	}
 
 	for {
-		fmt.Println("1- Add a product\n2- Display all products\n3- Modify a product\n4- Deactivate a product\n5- Add a customer\n6- Display all customers\n7- Modify a customer\n8- Quit")
+		fmt.Println("1- Add a product\n2- Display all products\n3- Modify a product\n4- Deactivate a product\n5- Add a customer\n6- Display all customers\n7- Modify a customer\n8- Export all products to CSV\n9- Export all customers to CSV\n10- Quit")		
 		var choice int
 		fmt.Scan(&choice)
 		if action, ok := actions[choice]; ok {
@@ -226,4 +229,46 @@ func getColumnsAndValues(entity Entity) (string, string) {
 		return "firstName, lastName, phone, address, email", fmt.Sprintf("'%s', '%s', '%s', '%s', '%s'", e.FirstName, e.LastName, e.Phone, e.Address, e.Email)
 	}
 	return "", ""
+}
+
+func exportToCSV(entity Entity, db *sql.DB, filePath string) {
+    file, err := os.Create(filePath)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer file.Close()
+
+    writer := csv.NewWriter(file)
+    defer writer.Flush()
+
+    // Write headers to CSV
+    var headers []string
+    switch entity.(type) {
+    case *Product:
+        headers = []string{"Id", "Title", "Description", "Quantity", "Price", "Active"}
+    case *Customer:
+        headers = []string{"Id", "FirstName", "LastName", "Phone", "Address", "Email"}
+    }
+    writer.Write(headers)
+
+    rows, err := db.Query(fmt.Sprintf("SELECT * FROM %s", entity.TableName()))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer rows.Close()
+
+    for rows.Next() {
+        err := entity.Scan(rows)
+        if err != nil {
+            log.Fatal(err)
+        }
+        var record []string
+        switch e := entity.(type) {
+        case *Product:
+            record = []string{strconv.Itoa(e.Id), e.Title, e.Description, strconv.Itoa(e.Quantity), fmt.Sprintf("%.2f", e.Price), strconv.FormatBool(e.Active)}
+        case *Customer:
+            record = []string{strconv.Itoa(e.Id), e.FirstName, e.LastName, e.Phone, e.Address, e.Email}
+        }
+        writer.Write(record)
+    }
 }
