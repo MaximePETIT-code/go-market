@@ -1,277 +1,229 @@
 package main
 
 import (
-    "database/sql"
-    "fmt"
-    "log"
-    "os"
-    "bufio"
+	"bufio"
+	"database/sql"
+	"fmt"
+	"log"
+	"os"
+	"strconv"
 
-    _ "github.com/go-sql-driver/mysql"
+	_ "github.com/go-sql-driver/mysql"
 )
 
+type Entity interface {
+	Scan(*sql.Rows) error
+	Display()
+	PromptForValues(*bufio.Scanner)
+	TableName() string
+	PromptForUpdate(*bufio.Scanner) (string, interface{})
+}
+
 type Product struct {
-    Id                 int
-    Title, Description string
-    Quantity           int
-    Price              float64
-    Active             bool
+	Id                 int
+	Title, Description string
+	Quantity           int
+	Price              float32
+	Active             bool
 }
 
 type Customer struct {
-    Id        int
-    FirstName string
-    LastName  string
-    Phone     string
-    Address   string
-    Email     string
+	Id                                int
+	FirstName, LastName, Phone, Address, Email string
+}
+
+func (p *Product) Scan(rows *sql.Rows) error {
+	return rows.Scan(&p.Id, &p.Title, &p.Description, &p.Price, &p.Quantity, &p.Active)
+}
+
+func (c *Customer) Scan(rows *sql.Rows) error {
+	return rows.Scan(&c.Id, &c.FirstName, &c.LastName, &c.Phone, &c.Address, &c.Email)
+}
+
+func (p *Product) Display() {
+	fmt.Printf("ID: %d\nTitle: %s\nDescription: %s\nQuantity: %d\nPrice: %.2f\nActive: %v\n\n", p.Id, p.Title, p.Description, p.Quantity, p.Price, p.Active)
+}
+
+func (c *Customer) Display() {
+	fmt.Printf("ID: %d\nFirst Name: %s\nLast Name: %s\nPhone: %s\nAddress: %s\nEmail: %s\n\n", c.Id, c.FirstName, c.LastName, c.Phone, c.Address, c.Email)
+}
+
+func (p *Product) TableName() string {
+	return "Products"
+}
+
+func (c *Customer) TableName() string {
+	return "Customers"
 }
 
 func main() {
-    db, err := sql.Open("mysql", "root:@/examGo")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer db.Close()
+	db, err := sql.Open("mysql", "root:@/examGo")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 
-    actions := map[int]func(){
-        1: addProduct(db),
-        2: displayProducts(db),
-		3: modifyProduct(db),
-        4: deactivateProduct(db),
-        5: addCustomer(db),
-        6: displayCustomers(db),
-        7: modifyCustomer(db),
-        8: func() { os.Exit(0) },
-    }
+	actions := map[int]func(){
+		1: func() { handleAction(addEntity, &Product{}, db) },
+		2: func() { handleAction(displayEntities, &Product{}, db) },
+		3: func() { handleAction(modifyEntity, &Product{}, db) },
+		4: func() { handleAction(deactivateEntity, &Product{}, db) },
+		5: func() { handleAction(addEntity, &Customer{}, db) },
+		6: func() { handleAction(displayEntities, &Customer{}, db) },
+		7: func() { handleAction(modifyEntity, &Customer{}, db) },
+		8: func() { os.Exit(0) },
+	}
 
-    for {
-    	fmt.Println("1- Add a product\n2- Display all products\n3- Modify a product\n4- Deactivate a product\n5- Add a customer\n6- Display all customers\n7- Modify a customer\n8- Quit")
-        var choice int
-        fmt.Scan(&choice)
-        if action, ok := actions[choice]; ok {
-            action()
-        } else {
-            fmt.Println("Invalid choice. Please choose a valid option.")
-        }
-    }
+	for {
+		fmt.Println("1- Add a product\n2- Display all products\n3- Modify a product\n4- Deactivate a product\n5- Add a customer\n6- Display all customers\n7- Modify a customer\n8- Quit")
+		var choice int
+		fmt.Scan(&choice)
+		if action, ok := actions[choice]; ok {
+			action()
+		} else {
+			fmt.Println("Invalid choice. Please choose a valid option.")
+		}
+	}
 }
 
-func displayProducts(db *sql.DB) func() {
-    return func() {
-        rows, err := db.Query("SELECT id, title, description, quantity, price, active FROM Products")
-        if err != nil {
-            log.Fatal(err)
-        }
-        defer rows.Close()
-
-        for rows.Next() {
-            var product Product
-            err := rows.Scan(&product.Id, &product.Title, &product.Description, &product.Quantity, &product.Price, &product.Active)
-            if err != nil {
-                log.Fatal(err)
-            }
-            fmt.Printf("Id: %d\nTitle: %s\nDescription: %s\nQuantity: %d\nPrice: %.2f\nActive: %t\n\n", product.Id, product.Title, product.Description, product.Quantity, product.Price, product.Active)
-        }
-    }
+func handleAction(action func(Entity, *sql.DB), entity Entity, db *sql.DB) {
+	action(entity, db)
 }
 
-func addProduct(db *sql.DB) func() {
-    return func() {
-        product := Product{}
-        scanner := bufio.NewScanner(os.Stdin)
+func displayEntities(entity Entity, db *sql.DB) {
+	rows, err := db.Query(fmt.Sprintf("SELECT * FROM %s", entity.TableName()))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
 
-        fmt.Print("Enter product title: ")
-        scanner.Scan()
-        product.Title = scanner.Text()
-
-        fmt.Print("Enter product description: ")
-        scanner.Scan()
-        product.Description = scanner.Text()
-
-        fmt.Print("Enter product quantity: ")
-        fmt.Scan(&product.Quantity)
-
-        fmt.Print("Enter product price: ")
-        fmt.Scan(&product.Price)
-
-        _, err := db.Exec(`INSERT INTO Products (title, description, quantity, price, active) VALUES (?, ?, ?, ?, ?)`,
-            product.Title, product.Description, product.Quantity, product.Price, true)
-
-        if err != nil {
-            log.Fatal(err)
-        }
-
-        fmt.Println("Product inserted successfully")
-    }
+	for rows.Next() {
+		err := entity.Scan(rows)
+		if err != nil {
+			log.Fatal(err)
+		}
+		entity.Display()
+	}
 }
 
-func modifyProduct(db *sql.DB) func() {
-    return func() {
-        var id int
-        fmt.Print("Enter the ID of the product you want to modify: ")
-        fmt.Scan(&id)
-
-        fmt.Println("Which field do you want to update?")
-        fmt.Println("1- Title\n2- Description\n3- Quantity\n4- Price\n5- Active")
-        var choice int
-        fmt.Scan(&choice)
-
-        scanner := bufio.NewScanner(os.Stdin)
-        var field, value string
-
-        switch choice {
-        case 1:
-            field = "title"
-            fmt.Print("Enter new title: ")
-        case 2:
-            field = "description"
-            fmt.Print("Enter new description: ")
-        case 3:
-            field = "quantity"
-            fmt.Print("Enter new quantity: ")
-            scanner.Scan()
-            value = scanner.Text()
-        case 4:
-            field = "price"
-            fmt.Print("Enter new price: ")
-            scanner.Scan()
-            value = scanner.Text()
-        case 5:
-            field = "active"
-            fmt.Print("Enter new active status (true/false): ")
-        default:
-            fmt.Println("Invalid choice. Please choose a valid option.")
-            return
-        }
-
-        scanner.Scan()
-        value = scanner.Text()
-
-        query := fmt.Sprintf("UPDATE Products SET %s = ? WHERE id = ?", field)
-        _, err := db.Exec(query, value, id)
-        if err != nil {
-            log.Fatal(err)
-        }
-
-        fmt.Println("Product modified successfully")
-    }
+func addEntity(entity Entity, db *sql.DB) {
+	scanner := bufio.NewScanner(os.Stdin)
+	entity.PromptForValues(scanner)
+	columns, values := getColumnsAndValues(entity)
+	query := fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`, entity.TableName(), columns, values)
+	_, err := db.Exec(query)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
-func deactivateProduct(db *sql.DB) func() {
-    return func() {
-        var id int
-        fmt.Print("Enter the ID of the product you want to deactivate: ")
-        fmt.Scan(&id)
+func modifyEntity(entity Entity, db *sql.DB) {
+	var id int
+	fmt.Print("Enter the ID of the entity you want to modify: ")
+	fmt.Scan(&id)
 
-        _, err := db.Exec("UPDATE Products SET active = ? WHERE id = ?", false, id)
-        if err != nil {
-            log.Fatal(err)
-        }
-
-        fmt.Println("Product deactivated successfully")
-    }
+	scanner := bufio.NewScanner(os.Stdin)
+	field, value := entity.PromptForUpdate(scanner)
+	if field != "" {
+		_, err := db.Exec(fmt.Sprintf(`UPDATE %s SET %s = ? WHERE id = ?`, entity.TableName(), field), value, id)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		fmt.Println("Invalid choice. Please choose a valid option.")
+	}
 }
 
-func addCustomer(db *sql.DB) func() {
-    return func() {
-        customer := Customer{}
-        scanner := bufio.NewScanner(os.Stdin)
+func deactivateEntity(entity Entity, db *sql.DB) {
+	var id int
+	fmt.Print("Enter the ID of the entity you want to deactivate: ")
+	fmt.Scan(&id)
 
-        fmt.Print("Enter customer first name: ")
-        scanner.Scan()
-        customer.FirstName = scanner.Text()
-
-        fmt.Print("Enter customer last name: ")
-        scanner.Scan()
-        customer.LastName = scanner.Text()
-
-        fmt.Print("Enter customer phone: ")
-        scanner.Scan()
-        customer.Phone = scanner.Text()
-
-        fmt.Print("Enter customer address: ")
-        scanner.Scan()
-        customer.Address = scanner.Text()
-
-        fmt.Print("Enter customer email: ")
-        scanner.Scan()
-        customer.Email = scanner.Text()
-
-        _, err := db.Exec(`INSERT INTO Customers (firstName, lastName, phone, address, email) VALUES (?, ?, ?, ?, ?)`,
-            customer.FirstName, customer.LastName, customer.Phone, customer.Address, customer.Email)
-
-        if err != nil {
-            log.Fatal(err)
-        }
-
-        fmt.Println("Customer inserted successfully")
-    }
+	_, err := db.Exec(fmt.Sprintf(`UPDATE %s SET active = ? WHERE id = ?`, entity.TableName()), false, id)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
-func displayCustomers(db *sql.DB) func() {
-    return func() {
-        rows, err := db.Query("SELECT id, firstName, lastName, phone, address, email FROM Customers")
-        if err != nil {
-            log.Fatal(err)
-        }
-        defer rows.Close()
-
-        for rows.Next() {
-            var customer Customer
-            err := rows.Scan(&customer.Id, &customer.FirstName, &customer.LastName, &customer.Phone, &customer.Address, &customer.Email)
-            if err != nil {
-                log.Fatal(err)
-            }
-            fmt.Printf("Id: %d\nFirst Name: %s\nLast Name: %s\nPhone: %s\nAddress: %s\nEmail: %s\n\n", customer.Id, customer.FirstName, customer.LastName, customer.Phone, customer.Address, customer.Email)
-        }
-    }
+func (p *Product) PromptForValues(scanner *bufio.Scanner) {
+	prompt(scanner, "Enter product title: ", &p.Title)
+	prompt(scanner, "Enter product description: ", &p.Description)
+	fmt.Print("Enter product quantity: ")
+	fmt.Scan(&p.Quantity)
+	fmt.Print("Enter product price: ")
+	fmt.Scan(&p.Price)
+	p.Active = true
 }
 
-func modifyCustomer(db *sql.DB) func() {
-    return func() {
-        var id int
-        fmt.Print("Enter the ID of the customer you want to modify: ")
-        fmt.Scan(&id)
+func (c *Customer) PromptForValues(scanner *bufio.Scanner) {
+	prompt(scanner, "Enter customer first name: ", &c.FirstName)
+	prompt(scanner, "Enter customer last name: ", &c.LastName)
+	prompt(scanner, "Enter customer phone: ", &c.Phone)
+	prompt(scanner, "Enter customer address: ", &c.Address)
+	prompt(scanner, "Enter customer email: ", &c.Email)
+}
 
-        fmt.Println("Which field do you want to update?")
-        fmt.Println("1- First Name\n2- Last Name\n3- Phone\n4- Address\n5- Email")
-        var choice int
-        fmt.Scan(&choice)
+func prompt(scanner *bufio.Scanner, message string, field *string) {
+	fmt.Print(message)
+	scanner.Scan()
+	*field = scanner.Text()
+}
 
-        scanner := bufio.NewScanner(os.Stdin)
-        var field, value string
+func (p *Product) PromptForUpdate(scanner *bufio.Scanner) (string, interface{}) {
+	return promptForFieldUpdate(scanner, map[string]string{
+		"1": "title",
+		"2": "description",
+		"3": "quantity",
+		"4": "price",
+		"5": "active",
+	})
+}
 
-        switch choice {
-        case 1:
-            field = "firstName"
-            fmt.Print("Enter new first name: ")
-        case 2:
-            field = "lastName"
-            fmt.Print("Enter new last name: ")
-        case 3:
-            field = "phone"
-            fmt.Print("Enter new phone: ")
-        case 4:
-            field = "address"
-            fmt.Print("Enter new address: ")
-        case 5:
-            field = "email"
-            fmt.Print("Enter new email: ")
-        default:
-            fmt.Println("Invalid choice. Please choose a valid option.")
-            return
-        }
+func (c *Customer) PromptForUpdate(scanner *bufio.Scanner) (string, interface{}) {
+	return promptForFieldUpdate(scanner, map[string]string{
+		"1": "firstName",
+		"2": "lastName",
+		"3": "phone",
+		"4": "address",
+		"5": "email",
+	})
+}
 
-        scanner.Scan()
-        value = scanner.Text()
+func promptForFieldUpdate(scanner *bufio.Scanner, fields map[string]string) (string, interface{}) {
+	fmt.Println("Which field do you want to update?")
+	for k, v := range fields {
+		fmt.Printf("%s- %s\n", k, v)
+	}
+	scanner.Scan()
+	choice := scanner.Text()
+	field, ok := fields[choice]
+	if !ok {
+		return "", nil
+	}
+	fmt.Printf("Enter new %s: ", field)
+	scanner.Scan()
+	value := scanner.Text()
+	switch field {
+	case "quantity":
+		v, _ := strconv.Atoi(value)
+		return field, v
+	case "price":
+		v, _ := strconv.ParseFloat(value, 32)
+		return field, float32(v)
+	case "active":
+		v, _ := strconv.ParseBool(value)
+		return field, v
+	default:
+		return field, value
+	}
+}
 
-        query := fmt.Sprintf("UPDATE Customers SET %s = ? WHERE id = ?", field)
-        _, err := db.Exec(query, value, id)
-        if err != nil {
-            log.Fatal(err)
-        }
-
-        fmt.Println("Customer modified successfully")
-    }
+func getColumnsAndValues(entity Entity) (string, string) {
+	switch e := entity.(type) {
+	case *Product:
+		return "title, description, quantity, price, active", fmt.Sprintf("'%s', '%s', %d, %.2f, %v", e.Title, e.Description, e.Quantity, e.Price, e.Active)
+	case *Customer:
+		return "firstName, lastName, phone, address, email", fmt.Sprintf("'%s', '%s', '%s', '%s', '%s'", e.FirstName, e.LastName, e.Phone, e.Address, e.Email)
+	}
+	return "", ""
 }
