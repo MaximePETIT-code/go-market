@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"log"
+	"market/mail"
 	"market/models"
 	"market/views"
 	"os"
@@ -138,93 +139,88 @@ func ExportToCSV(entity Scannable, db *sql.DB, filePath string) {
     }
 }
 
-func AddOrder(db *sql.DB) {
-	order := &models.Order{}
-	fmt.Print("Enter customer ID: ")
-	fmt.Scan(&order.Customer.Id)
-	fmt.Print("Enter product ID: ")
-	fmt.Scan(&order.Product.Id)
-	fmt.Print("Enter quantity: ")
-	fmt.Scan(&order.Quantity)
+func AddOrder(db *sql.DB) (*models.Order, error) {
+    order := &models.Order{}
+    fmt.Print("Enter customer ID: ")
+    fmt.Scan(&order.Customer.Id)
+    fmt.Print("Enter product ID: ")
+    fmt.Scan(&order.Product.Id)
+    fmt.Print("Enter quantity: ")
+    fmt.Scan(&order.Quantity)
 
-	// Get the product details from the database
-	row := db.QueryRow("SELECT title, price, quantity FROM Products WHERE id = ?", order.Product.Id)
-	err := row.Scan(&order.Product.Title, &order.Product.Price, &order.Product.Quantity)
-	if err != nil {
-		log.Fatal(err)
-	}
+    // Get the product details from the database
+    row := db.QueryRow("SELECT title, price, quantity FROM Products WHERE id = ?", order.Product.Id)
+    err := row.Scan(&order.Product.Title, &order.Product.Price, &order.Product.Quantity)
+    if err != nil {
+        log.Fatal("Error fetching product details: ", err)
+        return nil, err
+    }
 
-	// Check if the available quantity is sufficient
-	if order.Product.Quantity < order.Quantity {
-		fmt.Println("Insufficient quantity available. Order cannot be placed.")
-		return
-	}
+    // Check if the available quantity is sufficient
+    if order.Product.Quantity < order.Quantity {
+        fmt.Println("Insufficient quantity available. Order cannot be placed.")
+        return nil, fmt.Errorf("insufficient quantity")
+    }
 
-	// Update the quantity in the database
-	_, err = db.Exec("UPDATE Products SET quantity = ? WHERE id = ?", order.Product.Quantity-order.Quantity, order.Product.Id)
-	if err != nil {
-		log.Fatal(err)
-	}
+    // Update the quantity in the database
+    _, err = db.Exec("UPDATE Products SET quantity = ? WHERE id = ?", order.Product.Quantity-order.Quantity, order.Product.Id)
+    if err != nil {
+        log.Fatal("Error updating product quantity: ", err)
+        return nil, err
+    }
 
-	// Get the current date
-	order.PurchaseDate = time.Now().Format("2006-01-02")
+    // Get customer details from the database
+    row = db.QueryRow("SELECT firstName, lastName, email FROM Customers WHERE id = ?", order.Customer.Id)
+    err = row.Scan(&order.Customer.FirstName, &order.Customer.LastName, &order.Customer.Email)
+    if err != nil {
+        log.Fatal("Error fetching customer details: ", err)
+        return nil, err
+    }
 
-	columns := "customerId, productId, quantity, price, purchaseDate"
-	values := fmt.Sprintf("%d, %d, %d, %.2f, '%s'", order.Customer.Id, order.Product.Id, order.Quantity, order.Product.Price, order.PurchaseDate)
-	query := fmt.Sprintf(`INSERT INTO Orders (%s) VALUES (%s)`, columns, values)
-	_, err = db.Exec(query)
-	if err != nil {
-		log.Fatal(err)
-	}
+    // Get the current date
+    order.PurchaseDate = time.Now().Format("2006-01-02")
 
-	// Get customer details from the database
-	row = db.QueryRow("SELECT firstName, lastName, email FROM Customers WHERE id = ?", order.Customer.Id)
-	err = row.Scan(&order.Customer.FirstName, &order.Customer.LastName, &order.Customer.Email)
-	if err != nil {
-		log.Fatal(err)
-	}
+    // Insert the order into the database
+    query := `INSERT INTO Orders (customerId, productId, quantity, price, purchaseDate) VALUES (?, ?, ?, ?, ?)`
+    _, err = db.Exec(query, order.Customer.Id, order.Product.Id, order.Quantity, order.Product.Price, order.PurchaseDate)
+    if err != nil {
+        log.Fatal("Error inserting order into database: ", err)
+        return nil, err
+    }
 
-	// Generate a PDF
-	pdf := gofpdf.New("P", "mm", "A4", "")
-	pdf.AddPage()
-	pdf.SetFont("Arial", "B", 16)
+    // After successfully adding the order, generate and send the order confirmation
+    err = GenerateAndSendOrderConfirmation(order)
+    if err != nil {
+        log.Fatal("Error generating and sending order confirmation: ", err)
+        return nil, err
+    }
 
-	// Add customer details to the PDF
-	pdf.Cell(40, 10, "Customer Details:")
-	pdf.Ln(10)
-	pdf.SetFont("Arial", "", 12)
-	pdf.Cell(40, 10, fmt.Sprintf("First Name: %s", order.Customer.FirstName))
-	pdf.Ln(10)
-	pdf.Cell(40, 10, fmt.Sprintf("Last Name: %s", order.Customer.LastName))
-	pdf.Ln(10)
-	pdf.Cell(40, 10, fmt.Sprintf("Email: %s", order.Customer.Email))
-	pdf.Ln(10)
-
-	// Add order details to the PDF
-	pdf.SetFont("Arial", "B", 16)
-	pdf.Cell(40, 10, "Order Details:")
-	pdf.Ln(10)
-	pdf.SetFont("Arial", "", 12)
-	pdf.Cell(40, 10, fmt.Sprintf("Product Name: %s", order.Product.Title))
-	pdf.Ln(10)
-	pdf.Cell(40, 10, fmt.Sprintf("Product ID: %d", order.Product.Id))
-	pdf.Ln(10)
-	pdf.Cell(40, 10, fmt.Sprintf("Quantity: %d", order.Quantity))
-	pdf.Ln(10)
-	pdf.Cell(40, 10, fmt.Sprintf("Price: %.2f", order.Product.Price))
-	pdf.Ln(10)
-	pdf.Cell(40, 10, fmt.Sprintf("Total Price: %.2f", order.Product.Price*float32(order.Quantity)))
-	pdf.Ln(10)
-	pdf.Cell(40, 10, fmt.Sprintf("Purchase Date: %s", order.PurchaseDate))
-	pdf.Ln(10)
-
-	// Save the PDF to a file
-	filename := fmt.Sprintf("exports/orders/order_%s.pdf", time.Now().Format("20060102_150405"))
-	err = pdf.OutputFileAndClose(filename)
-	if err != nil {
-		log.Fatal(err)
-	}
+    return order, nil
 }
+
+func GenerateAndSendOrderConfirmation(order *models.Order) error {
+    // Generate PDF content
+    pdf := gofpdf.New("P", "mm", "A4", "")
+    pdf.AddPage()
+    order.GeneratePDFContent(pdf)
+
+    // Save the PDF to a file
+    path := fmt.Sprintf("./exports/orders/order_%s.pdf", time.Now().Format("20060102_150405"))
+    err := pdf.OutputFileAndClose(path)
+    if err != nil {
+        return err
+    }
+
+    // Send the email with the PDF attachment
+    err = mail.Send(order.Customer.Email, "Order Confirmation", "Thank you for your order. Please find the attached invoice.", path)
+    if err != nil {
+        return err
+    }
+
+    return nil
+}
+
+
 
 func getColumnsAndValues(entity Entity) (string, string) {
 	switch e := entity.(type) {
