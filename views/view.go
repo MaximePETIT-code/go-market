@@ -16,7 +16,8 @@ func DisplayMenu() {
 	fmt.Println("8- Export all products to CSV")
 	fmt.Println("9- Export all customers to CSV")
 	fmt.Println("10- Add an order")
-	fmt.Println("11- Quit")
+	fmt.Println("11- Export all orders to CSV")
+	fmt.Println("12- Quit")
 }
 
 func DisplayMessage(message string) {

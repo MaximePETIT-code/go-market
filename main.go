@@ -31,7 +31,8 @@ func main() {
 		8:  func() { controllers.ExportToCSV(&models.Product{}, db, "exports/products.csv") },
 		9:  func() { controllers.ExportToCSV(&models.Customer{}, db, "exports/customers.csv") },
 		10: func() { controllers.AddOrder(db) },
-		11: func() { os.Exit(0) },
+		11: func() { controllers.ExportToCSV(&models.Order{}, db, "exports/orders.csv") },
+		12: func() { os.Exit(0) },
 	}
 
 	for {
